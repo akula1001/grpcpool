@@ -1,8 +1,9 @@
 package grpcpool
 
 import (
-	"google.golang.org/grpc"
 	"io"
+
+	"google.golang.org/grpc"
 )
 
 type Evictor interface {
@@ -30,4 +31,5 @@ func (self *GrpcConnection) Get() *grpc.ClientConn {
 
 func (self *GrpcConnection) Evict() {
 	self.GrpcConn.Close()
+	self.pool.evicted()
 }

@@ -1,6 +1,9 @@
 package grpcpool
 
 import (
+	"context"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,13 +32,10 @@ func TestShouldgetFirstIdleConnection(t *testing.T) {
 
 func TestShouldDialNewConnection(t *testing.T) {
 	dialed := false
-	pool := ConnectionPool{
-		activeCount: 1,
-		dialFunc: func() (*grpc.ClientConn, error) {
-			dialed = true
-			return nil, nil
-		},
-	}
+	pool, _ := NewConnectionPool(1, 1, func() (*grpc.ClientConn, error) {
+		dialed = true
+		return nil, nil
+	})
 	pool.get()
 	assert.True(t, dialed)
 }
@@ -43,7 +43,7 @@ func TestShouldDialNewConnection(t *testing.T) {
 func TestShouldBlockIfNoConnectionsAreAvailable(t *testing.T) {
 	blockedChannel := make(chan Connection, 1)
 	go func() {
-		pool := ConnectionPool{}
+		pool, _ := NewConnectionPool(0, 1, func() (*grpc.ClientConn, error) { return nil, nil })
 		conn, _ := pool.Get()
 		blockedChannel <- conn
 	}()
@@ -118,6 +118,63 @@ func TestShouldProvideExclusiveConnection(t *testing.T) {
 		}))
 		uniqueConnections[i-1] = pooledConn
 	}
+}
+
+func TestPoolShouldNotExceedConfiguredMaxConnections(t *testing.T) {
+	maxCount := 3
+	created := 0
+	pool, _ := NewConnectionPool(maxCount, 1, func() (*grpc.ClientConn, error) {
+		created = created + 1
+		mockConnection := &MockConnection{}
+		mockConnection.On("Close").Return(nil)
+		conn, _ := grpc.DialContext(context.Background(), "fakeaddr", grpc.WithDialer(func(string, time.Duration) (net.Conn, error) {
+			return mockConnection, nil
+		}), grpc.WithInsecure())
+		return conn, nil
+	})
+
+	n := 1000
+	wg := sync.WaitGroup{}
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			conn, _ := pool.Get()
+			defer conn.Close()
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, maxCount, created)
+}
+
+func TestPoolShouldMakeNewConnectionsAfterEvictions(t *testing.T) {
+	maxCount := 3
+	created := 0
+	pool, _ := NewConnectionPool(maxCount, 1, func() (*grpc.ClientConn, error) {
+		created = created + 1
+		mockConnection := &MockConnection{}
+		mockConnection.On("Close").Return(nil)
+		conn, _ := grpc.DialContext(context.Background(), "fakeaddr", grpc.WithDialer(func(string, time.Duration) (net.Conn, error) {
+			return mockConnection, nil
+		}), grpc.WithInsecure())
+		return conn, nil
+	})
+
+	n := 100
+	wg := sync.WaitGroup{}
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			conn, _ := pool.Get()
+			conn.Evict()
+		}()
+	}
+	wg.Wait()
+	assert.True(t, created >= maxCount && created < maxCount+n)
+
+	pool.Get()
+	assert.True(t, created >= maxCount && created < maxCount+n)
 }
 
 func Any(conns []*grpc.ClientConn, f func(*grpc.ClientConn) bool) bool {

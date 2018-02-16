@@ -5,10 +5,11 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/stretchr/testify/mock"
 	"context"
-	"time"
 	"net"
+	"time"
+
+	"github.com/stretchr/testify/mock"
 )
 
 type MockPool struct {
@@ -27,6 +28,9 @@ func (m MockPool) Close() {
 func (m MockPool) put(client *grpc.ClientConn) error {
 	m.Called(client)
 	return nil
+}
+
+func (m MockPool) evicted() {
 }
 
 func TestShouldPutConnectionBackInPoolAfterClose(t *testing.T) {
